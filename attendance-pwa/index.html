@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <title>Attendance</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#1a1208" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Attendance" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #faf7f2; font-family: Georgia, "Times New Roman", serif; color: #1a1208; -webkit-tap-highlight-color: transparent; }
+    button { -webkit-tap-highlight-color: transparent; }
+    button:active { opacity: 0.75; }
+    input:focus { outline: none; border-color: #d4a853 !important; box-shadow: 0 0 0 3px #d4a85322; }
+    ::-webkit-scrollbar { display: none; }
+
+    @keyframes pop {
+      from { opacity: 0; transform: translateX(-50%) scale(0.9); }
+      to   { opacity: 1; transform: translateX(-50%) scale(1); }
+    }
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Safe area insets for iPhone notch / home bar */
+    #app { padding-bottom: env(safe-area-inset-bottom); }
+    .header { padding-top: calc(28px + env(safe-area-inset-top)); }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel">
+    const { useState, useEffect } = React;
+    const STORAGE_KEY = "attendance-pwa-v1";
+
+    const SEED = [
+      { id: "s1", name: "Alice Johnson" },
+      { id: "s2", name: "Bob Smith" },
+      { id: "s3", name: "Carol White" },
+    ];
+
+    function uid() { return Math.random().toString(36).slice(2, 9); }
+    function getToday() { return new Date().toISOString().split("T")[0]; }
+    function fmtLong(d) {
+      return new Date(d + "T00:00:00").toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
+    }
+    function fmtShort(d) {
+      return new Date(d + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    }
+
+    function load() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) return JSON.parse(raw);
+      } catch {}
+      return null;
+    }
+    function save(students, attendance) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ students, attendance })); } catch {}
+    }
+
+    function App() {
+      const [students, setStudents] = useState(null);
+      const [allAtt, setAllAtt] = useState({});
+      const [tab, setTab] = useState("mark");
+      const [newName, setNewName] = useState("");
+      const [flash, setFlash] = useState(null);
+      const today = getToday();
+
+      useEffect(() => {
+        const d = load();
+        if (d) { setStudents(d.students || SEED); setAllAtt(d.attendance || {}); }
+        else setStudents(SEED);
+      }, []);
+
+      const updStudents = (s) => { setStudents(s); save(s, allAtt); };
+      const updAtt = (date, rec) => {
+        const a = { ...allAtt, [date]: rec };
+        setAllAtt(a); save(students, a);
+      };
+
+      const toast = (msg) => { setFlash(msg); setTimeout(() => setFlash(null), 1800); };
+      const todayRec = allAtt[today] || {};
+
+      const toggle = (id) => {
+        const cur = todayRec[id];
+        const next = cur === "present" ? "absent" : cur === "absent" ? undefined : "present";
+        const rec = { ...todayRec };
+        if (next === undefined) delete rec[id]; else rec[id] = next;
+        updAtt(today, rec);
+      };
+
+      const markAll = (status) => {
+        const rec = {};
+        students.forEach((s) => (rec[s.id] = status));
+        updAtt(today, rec);
+      };
+
+      const addStudent = () => {
+        const name = newName.trim();
+        if (!name) return;
+        if (students.some((s) => s.name.toLowerCase() === name.toLowerCase())) return toast("Already on the list!");
+        updStudents([...students, { id: uid(), name }]);
+        setNewName(""); toast(`${name} added`);
+      };
+
+      const removeStudent = (id, name) => { updStudents(students.filter((s) => s.id !== id)); toast(`${name} removed`); };
+
+      const historyDates = Object.keys(allAtt).sort((a, b) => (a < b ? 1 : -1));
+
+      const exportCSV = () => {
+        const header = ["Student", ...historyDates.map(fmtShort)].join(",");
+        const rows = students.map((s) =>
+          [s.name, ...historyDates.map((d) => allAtt[d]?.[s.id] || "—")].join(",")
+        );
+        const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv" });
+        const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: "attendance.csv" });
+        a.click(); toast("CSV exported!");
+      };
+
+      if (!students) return <div style={{ height: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#aaa" }}>Loading…</div>;
+
+      const present = students.filter((s) => todayRec[s.id] === "present").length;
+      const absent  = students.filter((s) => todayRec[s.id] === "absent").length;
+      const unmarked = students.filter((s) => !todayRec[s.id]).length;
+      const pct = students.length > 0 ? Math.round((present / students.length) * 100) : 0;
+
+      return (
+        <div id="app-inner" style={{ minHeight: "100vh", background: "#faf7f2" }}>
+
+          {flash && (
+            <div style={{ position: "fixed", top: 18, left: "50%", transform: "translateX(-50%)", background: "#1a1208", color: "#faf7f2", padding: "9px 22px", borderRadius: 40, fontSize: 13, zIndex: 999, whiteSpace: "nowrap", boxShadow: "0 4px 20px rgba(0,0,0,0.18)", animation: "pop .15s ease" }}>
+              {flash}
+            </div>
+          )}
+
+          {/* Header */}
+          <div className="header" style={{ background: "#1a1208", color: "#faf7f2", padding: "28px 24px 20px" }}>
+            <div style={{ fontSize: 11, letterSpacing: "0.18em", color: "#a0855a", textTransform: "uppercase", marginBottom: 6 }}>Class Register</div>
+            <div style={{ fontSize: 26, fontWeight: "normal", lineHeight: 1.1 }}>Today's Attendance</div>
+            <div style={{ fontSize: 13, color: "#9e8b71", marginTop: 4 }}>{fmtLong(today)}</div>
+            <div style={{ marginTop: 18, background: "#2e2416", borderRadius: 4, height: 6, overflow: "hidden" }}>
+              <div style={{ height: "100%", borderRadius: 4, background: "linear-gradient(90deg,#d4a853,#e8c47a)", width: `${pct}%`, transition: "width 0.4s ease" }} />
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 12, color: "#9e8b71" }}>
+              <span>{present} present · {absent} absent{unmarked > 0 ? ` · ${unmarked} unmarked` : ""}</span>
+              <span style={{ color: "#d4a853" }}>{pct}%</span>
+            </div>
+          </div>
+
+          {/* Tabs */}
+          <div style={{ display: "flex", borderBottom: "2px solid #ede8df", background: "#faf7f2", position: "sticky", top: 0, zIndex: 10 }}>
+            {[["mark","Mark"],["history","History"],["manage","Students"]].map(([key, label]) => (
+              <button key={key} onClick={() => setTab(key)} style={{ flex: 1, padding: "13px 0", border: "none", background: "none", fontFamily: "Georgia,serif", fontSize: 13, color: tab === key ? "#1a1208" : "#b0a090", borderBottom: tab === key ? "2px solid #d4a853" : "2px solid transparent", marginBottom: -2, cursor: "pointer" }}>
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div style={{ padding: "20px 20px 40px", maxWidth: 500, margin: "0 auto" }}>
+
+            {/* MARK */}
+            {tab === "mark" && (
+              students.length === 0
+                ? <Empty text='No students yet — add some in "Students"' />
+                : <>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+                      <QBtn label="All Present" onClick={() => markAll("present")} green />
+                      <QBtn label="All Absent"  onClick={() => markAll("absent")} />
+                    </div>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                      {students.map((s, i) => {
+                        const st = todayRec[s.id];
+                        return (
+                          <button key={s.id} onClick={() => toggle(s.id)} style={{ display: "flex", alignItems: "center", padding: "14px 16px", border: "1.5px solid", borderColor: st === "present" ? "#b8d4a8" : st === "absent" ? "#e8b4b4" : "#e0d8cc", borderRadius: 10, background: st === "present" ? "#f0f8ec" : st === "absent" ? "#fdf1f1" : "#fff", cursor: "pointer", textAlign: "left", transition: "all 0.12s", animation: `slideIn 0.2s ease ${i*0.03}s both`, width: "100%" }}>
+                            <div style={{ width: 34, height: 34, borderRadius: "50%", flexShrink: 0, background: st === "present" ? "#d4eed0" : st === "absent" ? "#f5d4d4" : "#ede8df", color: st === "present" ? "#3a7a2a" : st === "absent" ? "#9a2a2a" : "#a09080", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: "bold" }}>
+                              {s.name[0].toUpperCase()}
+                            </div>
+                            <span style={{ flex: 1, marginLeft: 12, fontSize: 15, color: "#1a1208" }}>{s.name}</span>
+                            <span style={{ fontSize: 11, padding: "3px 10px", borderRadius: 20, fontFamily: "monospace", background: st === "present" ? "#d4eed0" : st === "absent" ? "#f5d4d4" : "#ede8df", color: st === "present" ? "#2d6020" : st === "absent" ? "#8a1c1c" : "#a09080" }}>
+                              {st === "present" ? "✓ present" : st === "absent" ? "✗ absent" : "tap to mark"}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </>
+            )}
+
+            {/* HISTORY */}
+            {tab === "history" && (
+              <>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, color: "#a09080", letterSpacing: "0.1em", textTransform: "uppercase" }}>
+                    {historyDates.length} Session{historyDates.length !== 1 ? "s" : ""}
+                  </div>
+                  {historyDates.length > 0 && (
+                    <button onClick={exportCSV} style={{ background: "#1a1208", color: "#faf7f2", border: "none", borderRadius: 8, padding: "7px 16px", cursor: "pointer", fontFamily: "Georgia,serif", fontSize: 12 }}>Export CSV</button>
+                  )}
+                </div>
+                {historyDates.length === 0 && <Empty text="No sessions recorded yet." />}
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {historyDates.map((date) => {
+                    const rec = allAtt[date] || {};
+                    const p = students.filter((s) => rec[s.id] === "present").length;
+                    const a = students.filter((s) => rec[s.id] === "absent").length;
+                    const isToday = date === today;
+                    return (
+                      <div key={date} style={{ background: "#fff", border: "1.5px solid", borderColor: isToday ? "#d4a853" : "#e0d8cc", borderRadius: 12, padding: "14px 16px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                          <div>
+                            <span style={{ fontSize: 14 }}>{fmtLong(date)}</span>
+                            {isToday && <span style={{ marginLeft: 8, background: "#d4a853", color: "#fff", fontSize: 10, padding: "2px 8px", borderRadius: 20, verticalAlign: "middle" }}>TODAY</span>}
+                          </div>
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <Chip green label={`${p} ✓`} />
+                            <Chip label={`${a} ✗`} />
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+                          {students.map((s) => {
+                            const st = rec[s.id];
+                            return <span key={s.id} style={{ fontSize: 12, padding: "3px 10px", borderRadius: 20, fontFamily: "monospace", background: st === "present" ? "#f0f8ec" : st === "absent" ? "#fdf1f1" : "#f5f2ee", color: st === "present" ? "#2d6020" : st === "absent" ? "#8a1c1c" : "#b0a090", border: "1px solid", borderColor: st === "present" ? "#b8d4a8" : st === "absent" ? "#e8b4b4" : "#e0d8cc" }}>{s.name}</span>;
+                          })}
+                        </div>
+                        <div style={{ marginTop: 10, background: "#f0ebe3", borderRadius: 3, height: 4, overflow: "hidden" }}>
+                          <div style={{ height: "100%", borderRadius: 3, background: "linear-gradient(90deg,#7ab868,#a8d896)", width: students.length > 0 ? `${Math.round((p/students.length)*100)}%` : "0%" }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {/* STUDENTS */}
+            {tab === "manage" && (
+              <>
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ fontSize: 11, color: "#a09080", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>Add Student</div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <input value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addStudent()} placeholder="Full name…" style={{ flex: 1, padding: "11px 14px", border: "1.5px solid #e0d8cc", borderRadius: 10, fontFamily: "Georgia,serif", fontSize: 14, color: "#1a1208", background: "#fff" }} />
+                    <button onClick={addStudent} style={{ background: "#1a1208", color: "#faf7f2", border: "none", borderRadius: 10, padding: "11px 20px", cursor: "pointer", fontFamily: "Georgia,serif", fontSize: 14 }}>Add</button>
+                  </div>
+                </div>
+                <div style={{ fontSize: 11, color: "#a09080", letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>
+                  {students.length} Student{students.length !== 1 ? "s" : ""}
+                </div>
+                {students.length === 0 && <Empty text="No students yet" />}
+                <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+                  {students.map((s) => {
+                    const total = historyDates.length;
+                    const p = historyDates.filter((d) => allAtt[d]?.[s.id] === "present").length;
+                    const pct = total > 0 ? Math.round((p / total) * 100) : null;
+                    return (
+                      <div key={s.id} style={{ display: "flex", alignItems: "center", padding: "12px 16px", border: "1.5px solid #e0d8cc", borderRadius: 10, background: "#fff" }}>
+                        <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#ede8df", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 13, fontWeight: "bold", color: "#a09080", flexShrink: 0 }}>{s.name[0].toUpperCase()}</div>
+                        <div style={{ flex: 1, marginLeft: 12 }}>
+                          <div style={{ fontSize: 15 }}>{s.name}</div>
+                          {pct !== null && <div style={{ fontSize: 11, color: "#a09080", fontFamily: "monospace", marginTop: 2 }}>{pct}% ({p}/{total} sessions)</div>}
+                        </div>
+                        <button onClick={() => removeStudent(s.id, s.name)} style={{ background: "none", border: "1px solid #e0d8cc", color: "#b0a090", borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontFamily: "Georgia,serif", fontSize: 12 }}>Remove</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function QBtn({ label, onClick, green }) {
+      return <button onClick={onClick} style={{ flex: 1, padding: "9px 0", border: "1.5px solid", borderColor: green ? "#b8d4a8" : "#e8b4b4", borderRadius: 8, background: green ? "#f0f8ec" : "#fdf1f1", color: green ? "#2d6020" : "#8a1c1c", cursor: "pointer", fontFamily: "Georgia,serif", fontSize: 13 }}>{label}</button>;
+    }
+    function Chip({ label, green }) {
+      return <span style={{ fontSize: 11, padding: "2px 9px", borderRadius: 20, fontFamily: "monospace", background: green ? "#f0f8ec" : "#fdf1f1", color: green ? "#2d6020" : "#8a1c1c", border: `1px solid ${green ? "#b8d4a8" : "#e8b4b4"}` }}>{label}</span>;
+    }
+    function Empty({ text }) {
+      return <div style={{ textAlign: "center", color: "#b0a090", padding: "40px 0", fontSize: 14 }}>{text}</div>;
+    }
+
+    ReactDOM.createRoot(document.getElementById("app")).render(<App />);
+  </script>
+
+  <script>
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("sw.js");
+    }
+  </script>
+</body>
+</html>
