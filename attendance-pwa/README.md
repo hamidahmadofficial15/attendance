@@ -17,9 +17,3 @@
 4. Tap **"Add"**
 
 The app icon will appear on your home screen and open full-screen like a native app. It also works offline once loaded.
-
-## Notes
-
-- Data is saved in your browser's localStorage — it stays on your phone
-- To back up your data, use the **Export CSV** button in the History tab
-- Works on iPhone, iPad, and any desktop browser too
